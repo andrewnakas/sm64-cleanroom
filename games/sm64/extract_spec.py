@@ -21,6 +21,7 @@ import numpy as np
 
 from cleanroom.gfx import png
 from cleanroom.audio import descriptor
+from cleanroom.audio.pitch import median_f0
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -78,6 +79,9 @@ def sample_fact(buf):
     rate = m * 2.0 ** ((e & 0x7FFF) - 16383 - 63)
     d = {"nframes": nframes, "comm": comm.hex(), "rate": rate,
          "desc": descriptor.describe(pcm, rate)}
+    f0 = median_f0((pcm / 32768).astype(np.float32), rate)     # one number: the line's pitch level
+    if f0:
+        d["f0"] = round(f0, 1)
     for tag in ("MARK", "INST"):         # loop points (slot)
         if tag in ch:
             d[tag] = ch[tag].hex()

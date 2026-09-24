@@ -25,7 +25,7 @@ builds every asset from those facts:
 | Mario's eyes and cap emblem (12) | alpha outline | drawn procedurally (`drawn.py`) |
 | Other faces: eyes, mouths, whole faces (106) | alpha outline where kept | painted from our own written descriptions (`face_briefs.json`, `facepaint.py`) |
 | Castle paintings, portraits, stained glass, star door, power meter | kept outlines where present | paintings are renders of each level's own geometry with our textures (`level_render.py`, `paintings.py`); portraits/glass/door/meter drawn from our own descriptions |
-| Voices: Mario and Peach (50 lines) | length, rate, the words | spoken by an offline neural TTS (Piper) in character voices, best of 6 takes as judged by Whisper (`voices.py`); not the original performers |
+| Voices: Mario and Peach (47 lines + 3 snores) | length, rate, the words, one median-pitch number per line | performed by the project author against practice tracks, cut automatically (`takes.py`), then a studio chain (`voicefx.py`): noise reduction, de-essing, WORLD-vocoder pitch/formant/timing change toward the line's pitch level, EQ toward the line's coarse band outline, compression, level match. No original audio is used. (Earlier TTS voices: `voices.py`.) |
 | Other samples (169) | length, rate, loop points, a coarse spectral outline | resynthesised; our own 2-predictor VADPCM codebooks (bank sizes match the game's fixed audio pools) |
 | Music (m64 sequences) | the note events (user scope: melodies kept) | played by the resynthesised instruments |
 | Attract-mode demos | button inputs | — |
