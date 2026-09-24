@@ -26,7 +26,7 @@ import numpy as np
 
 from cleanroom.gfx import png, strokefont
 from cleanroom.audio import descriptor, vadpcm
-from . import drawn, facepaint
+from . import drawn, facepaint, voices, paintings
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPEC = os.path.join(HERE, "spec")
@@ -416,9 +416,40 @@ def _chunk(tag, data):
     return tag + struct.pack(">I", len(data)) + data + (b"\0" if len(data) & 1 else b"")
 
 
+def two_predictors(x):
+    """Two order-2 predictors fitted to our own waveform (least squares per
+    16-sample frame, then 2-means). Retail banks use 2 predictors per book;
+    bigger books grow the bank past the game's fixed audio pools."""
+    fits = []
+    for s in range(2, len(x) - 16, 16):
+        y, p1, p2 = x[s:s + 16], x[s - 1:s + 15], x[s - 2:s + 14]
+        A = np.stack([p1, p2], 1)
+        if (y ** 2).sum() < 1e3:
+            continue
+        a, *_ = np.linalg.lstsq(A, y, rcond=None)
+        fits.append(a)
+    if len(fits) < 2:
+        return [(1.0, 0.0), (1.8, -0.82)]
+    f = np.clip(np.asarray(fits), [-1.95, -0.98], [1.95, 0.98])
+    c = f[[np.argmin(f[:, 0]), np.argmax(f[:, 0])]].copy()
+    for _ in range(12):
+        lab = np.argmin(((f[:, None, :] - c[None]) ** 2).sum(-1), 1)
+        for k in range(2):
+            if (lab == k).any():
+                c[k] = f[lab == k].mean(0)
+    out = []
+    for a1, a2 in c:                       # keep the filters stable
+        a2 = float(np.clip(a2, -0.98, 0.98))
+        a1 = float(np.clip(a1, -(1 - a2) + 0.02, (1 - a2) - 0.02))
+        out.append((a1, a2))
+    return out
+
+
 def gen_sample(path, d):
     n, rate = d["nframes"], d["rate"]
-    x = descriptor.synthesize(d["desc"], n, rate, seed=_h("smp", path))
+    x = voices.cached(path)                 # spoken lines (TTS), else resynthesis
+    if x is None:
+        x = descriptor.synthesize(d["desc"], n, rate, seed=_h("smp", path))
     if "MARK" in d and "INST" in d:
         inst = bytes.fromhex(d["INST"])
         play, beg, end = struct.unpack(">hHH", inst[8:14])     # sustain loop
@@ -429,7 +460,7 @@ def gen_sample(path, d):
     # ramps in unrelated retail samples byte-for-byte
     dither = np.random.default_rng(_h("dither", path)).integers(-1, 2, n)
     pcm = np.clip(np.round(np.clip(x, -1, 1) * 32000) + dither, -32768, 32767).astype(">i2").tobytes()
-    book = vadpcm.make_book()
+    book = vadpcm.make_book(two_predictors(np.frombuffer(pcm, ">i2").astype(np.float64)))
     codes = b"stoc" + b"\x0bVADPCMCODES" + struct.pack(">hhh", 1, book["order"], book["npred"]) + \
         struct.pack(">%dh" % len(book["book"]), *book["book"])
     body = b"AIFF" + _chunk(b"COMM", bytes.fromhex(d["comm"]))
@@ -506,6 +537,8 @@ def main(argv):
         elif only is None and (a.endswith(".m64") or a.endswith(".bin")):
             _write(dst, open(os.path.join(SPEC, "kept", a), "rb").read())
             counts["kept"] += 1
+    if only in (None, "tex"):
+        counts["pictures"] = paintings.write_all(out)     # needs the textures above
     with open(os.path.join(out, ".assets-local.txt"), "w", newline="\n") as f:
         f.write("\n".join(spec["header"] + spec["assets"]) + "\n")
     print("generated:", ", ".join(f"{k} {v}" for k, v in counts.items()), "->", out)

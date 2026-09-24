@@ -90,9 +90,89 @@ def emblem(alpha, fg=(230, 20, 30), bg=(250, 250, 250)):
     return img
 
 
+SEGMENTS = {"full": 8, "seven_segments": 7, "six_segments": 6, "five_segments": 5, "four_segments": 4,
+            "three_segments": 3, "two_segments": 2, "one_segment": 1}
+
+
+def _meter_color(n):
+    return (40, 140, 255) if n >= 7 else (40, 200, 60) if n >= 5 else (250, 225, 20) if n >= 3 else (240, 40, 40)
+
+
+def meter_pie(n, alpha):
+    """Health pie: 8 wedges filled clockwise from 12 o'clock, gold rim."""
+    h, w = alpha.shape
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32) + 0.5
+    ys, xs = np.nonzero(alpha > 0)
+    cx, cy = (xs.min() + xs.max() + 1) / 2, (ys.min() + ys.max() + 1) / 2
+    rx, ry = (xs.max() + 1 - xs.min()) / 2, (ys.max() + 1 - ys.min()) / 2
+    ang = (np.degrees(np.arctan2(yy - cy, xx - cx)) + 90) % 360        # 0 = up, clockwise
+    r = np.hypot((xx - cx) / rx, (yy - cy) / ry)
+    col = np.asarray(_meter_color(n), np.float32)
+    wedge = (ang // 45).astype(int)
+    img = np.zeros((h, w, 4), np.float32)
+    img[..., :3] = np.where((wedge < n)[..., None], col, col * 0.22)
+    shade = 1.15 - 0.35 * r                                              # soft dome
+    img[..., :3] *= shade[..., None]
+    line = (np.minimum(ang % 45, 45 - ang % 45) * np.pi / 180 * r * rx) < 0.5
+    img[line & (r < 0.86), :3] *= 0.55
+    img[r >= 0.86, :3] = (215, 160, 80)
+    img[..., 3] = alpha
+    return np.clip(img, 0, 255)
+
+
+def meter_base(alpha64):
+    """The dial behind the pie: tan rim, dark centre, 'POWER' letters above."""
+    h, w = alpha64.shape
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32) + 0.5
+    img = np.zeros((h, w, 4), np.float32)
+    img[..., :3] = (228, 184, 122)
+    img[..., :3] *= (1 + 0.08 * np.sin(yy * 0.9 + np.sin(xx * 0.3) * 2))[..., None]    # our wood grain
+    cx, cy = w / 2, h * 0.62
+    r = np.hypot((xx - cx) / (w * 0.26), (yy - cy) / (h * 0.22))
+    img[r < 1, :3] = (70, 8, 10)
+    img[(r < 1) & (r > 0.9), :3] = (120, 30, 20)
+    colors = [(235, 40, 30), (250, 200, 20), (40, 190, 60), (40, 130, 250), (230, 80, 200)]
+    lw, lh = 11, 14
+    top = 18                                  # letters get our own alpha, not the old outline
+    alpha64 = alpha64.copy()
+    alpha64[:top] = 0
+    for i, (ch, c) in enumerate(zip("POWER", colors)):
+        x0 = 4 + i * lw
+        y0 = 1 + int(round(abs(i - 2) * 1.2))                               # gentle arc
+        m = strokefont.render(ch, lw, lh, thickness=1.3)
+        edge = np.zeros_like(m)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                edge = np.maximum(edge, np.roll(np.roll(m, dy, 0), dx, 1))
+        reg = img[y0:y0 + lh, x0:x0 + lw, :3]
+        reg[:] = reg * (1 - edge[..., None]) + np.asarray((60, 20, 10), np.float32) * edge[..., None]
+        reg[:] = reg * (1 - m[..., None]) + np.asarray(c, np.float32) * m[..., None]
+        alpha64[y0:y0 + lh, x0:x0 + lw] = np.maximum(alpha64[y0:y0 + lh, x0:x0 + lw], edge * 255)
+    img[..., 3] = alpha64
+    return np.clip(img, 0, 255)
+
+
+_METER_ALPHA = {}
+
+
 def drawn(path, alpha):
     """Return an RGBA image for paths drawn here, else None."""
     name = path.rsplit("/", 1)[-1].split(".")[0]
+    if name.startswith("power_meter_"):
+        key = name[len("power_meter_"):]
+        if key in SEGMENTS:
+            return meter_pie(SEGMENTS[key], alpha)
+        if key in ("left_side", "right_side"):
+            _METER_ALPHA[key] = alpha
+            other = "right_side" if key == "left_side" else "left_side"
+            if other not in _METER_ALPHA:            # need both halves' outlines
+                import json, os
+                from .generate import _unpack_alpha2
+                d = json.load(open(os.path.join(os.path.dirname(__file__), "spec", "textures.json")))[
+                    path.replace(key, other)]
+                _METER_ALPHA[other] = _unpack_alpha2(d["alpha2"], d["w"], d["h"])
+            full = meter_base(np.concatenate([_METER_ALPHA["left_side"], _METER_ALPHA["right_side"]], 1))
+            return full[:, :32] if key == "left_side" else full[:, 32:]
     if name.startswith("mario_eyes_"):
         kind = name[len("mario_eyes_"):].replace("_unused", "")
         kind = "closed" if kind.startswith("closed") else kind

@@ -53,6 +53,29 @@ function devHooks(t0) {
     var gc = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function (t, o) { o = o || {}; o.preserveDrawingBuffer = true; return gc.call(this, t, o); };
   }
+  if (Q.has('audiolog')) {   // log output loudness (dB) every 250 ms
+    var csp = AudioContext.prototype.createScriptProcessor;
+    AudioContext.prototype.createScriptProcessor = function () {
+      var node = csp.apply(this, arguments), acc = 0, n = 0, last = performance.now();
+      var desc = Object.getOwnPropertyDescriptor(ScriptProcessorNode.prototype, 'onaudioprocess');
+      Object.defineProperty(node, 'onaudioprocess', {
+        set: function (fn) {
+          desc.set.call(node, function (ev) {
+            fn(ev);
+            var d = ev.outputBuffer.getChannelData(0);
+            for (var i = 0; i < d.length; i++) { acc += d[i] * d[i]; }
+            n += d.length;
+            var t = performance.now();
+            if (t - last > 250) {
+              console.log('AUDIO ' + Math.round(t - t0) + ' ' + (10 * Math.log10(acc / Math.max(n, 1) + 1e-12)).toFixed(1));
+              acc = 0; n = 0; last = t;
+            }
+          });
+        }
+      });
+      return node;
+    };
+  }
   if (Q.has('hb')) setInterval(function () { console.log('hb ' + Math.round(performance.now() - t0)); }, 1000);
   var dumps = (Q.get('dump') || '').split(',').filter(Boolean).map(Number);
   dumps.forEach(function (s, k) {
