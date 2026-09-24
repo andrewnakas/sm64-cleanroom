@@ -23,6 +23,7 @@ builds every asset from those facts:
 | Fonts, HUD glyphs, icons (297) | cell size; character from the decomp's symbol names / charmap | drawn with an original stroke font and simple shapes |
 | Text-bearing textures | the words (as in the decomp's text) | re-typeset (`text_labels.json`) |
 | Mario's eyes and cap emblem (12) | alpha outline | drawn procedurally (`drawn.py`) |
+| Other faces: eyes, mouths, whole faces (106) | alpha outline where kept | painted from our own written descriptions (`face_briefs.json`, `facepaint.py`) |
 | Samples (219) | length, rate, loop points, a coarse spectral outline | resynthesised; our own VADPCM codebook |
 | Music (m64 sequences) | the note events (user scope: melodies kept) | played by the resynthesised instruments |
 | Attract-mode demos | button inputs | — |

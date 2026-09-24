@@ -26,7 +26,7 @@ import numpy as np
 
 from cleanroom.gfx import png, strokefont
 from cleanroom.audio import descriptor, vadpcm
-from . import drawn
+from . import drawn, facepaint
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SPEC = os.path.join(HERE, "spec")
@@ -476,6 +476,11 @@ def main(argv):
                 img = png.read(ov)
                 assert img.shape[:2] == (d["h"], d["w"]), (a, img.shape)
                 counts["override"] += 1
+            elif a in facepaint.briefs():
+                alpha = _unpack_alpha2(d["alpha2"], d["w"], d["h"]) if "alpha2" in d else None
+                img = facepaint.render(facepaint.briefs()[a], d["w"], d["h"], d["grid"], alpha, _h("face", a))
+                img = np.clip(img, 0, 255).astype(np.uint8)
+                counts["face"] = counts.get("face", 0) + 1
             elif "alpha2" in d and drawn.drawn(a, _unpack_alpha2(d["alpha2"], d["w"], d["h"])) is not None:
                 img = drawn.drawn(a, _unpack_alpha2(d["alpha2"], d["w"], d["h"]))
                 img = np.clip(img, 0, 255).astype(np.uint8)
