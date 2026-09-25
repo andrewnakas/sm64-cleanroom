@@ -161,27 +161,47 @@ def limit(x, ceiling=0.95):
     return x * (ceiling / peak) if peak > ceiling else x
 
 
-def close_gaps(x, sr, max_gap=0.12):
-    """Shorten silences between words to at most max_gap seconds."""
+def close_gaps(x, sr, max_gap=0.15, min_gap=0.25, xfade=0.012):
+    """Shorten real pauses between words (>= min_gap of near-silence) to
+    max_gap, joining the pieces with short crossfades so no clicks remain.
+    Quiet consonants (t, s, k) are far shorter than min_gap and stay intact."""
     hop = int(0.01 * sr)
     n = len(x) // hop
     e = np.sqrt((x[:n * hop].reshape(n, hop) ** 2).mean(1))
-    quiet = e < max(0.01, e.max() * 0.06)
-    keep = np.ones(len(x), bool)
+    quiet = e < max(0.006, e.max() * 0.03)
+    cuts = []
     i = 0
     while i < n:
         if quiet[i]:
             j = i
             while j < n and quiet[j]:
                 j += 1
-            if 0 < i and j < n and (j - i) * 0.01 > max_gap:
-                cut = int((j - i) * hop - max_gap * sr)
-                s = i * hop + int(max_gap * sr / 2)
-                keep[s:s + cut] = False
+            if 0 < i and j < n and (j - i) * 0.01 >= min_gap:
+                a = i * hop + int(max_gap * sr / 2)
+                b = j * hop - int(max_gap * sr / 2)
+                if b > a:
+                    cuts.append((a, b))
             i = j
         else:
             i += 1
-    return x[keep]
+    if not cuts:
+        return x
+    k = int(xfade * sr)
+    out, pos = x[:0], 0
+    for a, b in cuts:
+        piece = x[pos:a + k]
+        if len(out) >= k and len(piece) >= k:
+            ramp = np.linspace(0, 1, k, dtype=np.float32)
+            out[-k:] = out[-k:] * (1 - ramp) + piece[:k] * ramp
+            piece = piece[k:]
+        out = np.concatenate([out, piece])
+        pos = b
+    piece = x[pos:]
+    if len(out) >= k and len(piece) >= k:
+        ramp = np.linspace(0, 1, k, dtype=np.float32)
+        out[-k:] = out[-k:] * (1 - ramp) + piece[:k] * ramp
+        piece = piece[k:]
+    return np.concatenate([out, piece]).astype(np.float32)
 
 
 def utterances(x, sr, min_gap=0.35):
@@ -225,6 +245,8 @@ def target(slot):
     return (float(np.median(tonal)) if len(tonal) >= 2 else None), band, rms
 
 
+GENTLE_ST = 4.0      # below this pitch change, skip the vocoder
+
 # character targets: formant lift (semitones; pitch comes from the slot's kept
 # f0), intonation range multiplier, limits
 CHAR = {
@@ -248,6 +270,12 @@ def world_voice(x, sr, f0_goal, formant_st, expressive, stretch, max_st):
     if voiced.sum() < 3:
         return x, 0.0
     med = float(np.median(f0[voiced]))
+    # tracker glitches: fold octave jumps back toward the median, then a short
+    # median filter over voiced runs (no warble from single-frame errors)
+    fv = f0[voiced]
+    k = np.round(np.log2(fv / med))
+    fv = np.where(np.abs(k) >= 1, fv / 2 ** k, fv)
+    f0[voiced] = signal.medfilt(fv, 5)
     st = float(np.clip(12 * np.log2(f0_goal / med), -6, max_st))
     ratio = 2 ** (st / 12)
     f0n = f0.copy()
@@ -306,7 +334,17 @@ def process(x, sr, slot, text, prof, words, text_who="mario"):
     f0_goal = slot.get("f0") or ch["default_f0"]
     want_s = n_slot / slot["rate"]
     stretch = max(1.0, min(ch["max_speed"], (len(x) / sr) / want_s))
-    x, st = world_voice(x, sr, f0_goal, ch["formant_st"], ch["expressive"], stretch, ch["max_st"])
+    f0s = f0_track(x, sr)
+    need = 12 * np.log2(f0_goal / np.median(f0s)) if len(f0s) >= 3 else 99
+    if abs(need) < GENTLE_ST:
+        # small change: time-domain shift + WSOLA (no vocoder resynthesis, so
+        # no lost voicing on creaky or breathy passages)
+        st = float(need)
+        x = pitch_shift(x, sr, st)
+        x = wsola(x, stretch, sr)
+        info["path"] = "gentle"
+    else:
+        x, st = world_voice(x, sr, f0_goal, ch["formant_st"], ch["expressive"], stretch, ch["max_st"])
     info["pitch"] = round(st, 1)
     if stretch > 1.001:
         info["speed"] = round(stretch, 2)
@@ -358,6 +396,7 @@ def main(argv):
     print(f"voicefx: {len(done)} lines from your takes -> {CACHE}")
     print("  pitch moves (semitones):", ", ".join(f"{n.split('_', 1)[1]} {i['pitch']:+}" for n, i in done if "pitch" in i))
     print("  sped up to fit:", ", ".join(f"{n.split('_', 1)[1]} x{i['speed']}" for n, i in done if "speed" in i) or "none")
+    print("  gentle path (no vocoder):", ", ".join(n.split("_", 1)[1] for n, i in done if i.get("path") == "gentle") or "none")
     print("  tail trimmed:", ", ".join(f"{n.split('_', 1)[1]} x{i['trim']}" for n, i in done if "trim" in i) or "none")
 
 
